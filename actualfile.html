@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AtmoSphere | Climate Intelligence</title>
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        brand: {
+                            100: '#e0f2fe',
+                            400: '#38bdf8',
+                            500: '#0ea5e9',
+                            900: '#0c4a6e',
+                            950: '#082f49',
+                            space: '#020617',
+                        },
+                        alert: {
+                            warning: '#fbbf24',
+                            danger: '#ef4444',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- React & Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #020617; /* Space background */
+            color: #f8fafc;
+            overflow: hidden; /* We will handle scroll on the React container */
+        }
+        
+        /* The Three.js WebGL canvas sits at the absolute back */
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            /* Allow canvas to capture mouse events when UI doesn't block them */
+            pointer-events: auto; 
+        }
+
+        /* React root sits on top of the canvas */
+        #root {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none; /* Let clicks pass through to the 3D globe */
+        }
+
+        /* Re-enable pointer events for actual UI elements (buttons, panels) */
+        .pointer-events-auto {
+            pointer-events: auto;
+        }
+
+        /* Hide scrollbar for smooth aesthetic but keep functionality */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        /* Panel Scrollbars */
+        .panel-scroll::-webkit-scrollbar { width: 4px; }
+        .panel-scroll::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.5); }
+        .panel-scroll::-webkit-scrollbar-thumb { background: rgba(56, 189, 248, 0.3); border-radius: 2px; }
+
+        /* Glassmorphism UI */
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.65);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .glass-button {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.2s ease;
+        }
+        .glass-button:hover {
+            background: rgba(56, 189, 248, 0.15);
+            border-color: rgba(56, 189, 248, 0.4);
+        }
+
+        .tech-text {
+            font-family: 'JetBrains Mono', monospace;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    <div id="root"></div>
+
+    <script>
+        
+        // 1. Atmosphere Shader (Glow effect on the edge of the sphere)
+        const atmosphereVertexShader = `
+            varying vec3 vNormal;
+            void main() {
+                vNormal = normalize(normalMatrix * normal);
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `;
+        const atmosphereFragmentShader = `
+            varying vec3 vNormal;
+            void main() {
+                float intensity = pow(0.65 - dot(vNormal, vec3(0, 0, 1.0)), 4.0);
+                gl_FragColor = vec4(0.2, 0.6, 1.0, 1.0) * intensity * 1.5;
+            }
+        `;
+
+        // 2. Procedural Data Shader (Temp, Precip, Wind, Anomaly overlays)
+        const dataVertexShader = `
+            varying vec2 vUv;
+            varying vec3 vPosition;
+            void main() {
+                vUv = uv;
+                vPosition = position;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `;
+        
+        const dataFragmentShader = `
+            uniform float uTime;
+            uniform int uLayerType;
+            uniform float uOpacity;
+            
+            varying vec2 vUv;
+            varying vec3 vPosition;
+
+            vec3 hash33(vec3 p) { 
+                p = vec3( dot(p,vec3(127.1,311.7, 74.7)),
+                          dot(p,vec3(269.5,183.3,246.1)),
+                          dot(p,vec3(113.5,271.9,124.6)));
+                return -1.0 + 2.0*fract(sin(p)*4375.5453123);
+            }
+
+            float noise(vec3 p) {
+                vec3 i = floor(p + dot(p, vec3(0.333333)) );
+                vec3 x0 = p - i + dot(i, vec3(0.166666)) ;
+                vec3 g = step(x0.yzx, x0.xyz);
+                vec3 l = 1.0 - g;
+                vec3 i1 = min( g.xyz, l.zxy );
+                vec3 i2 = max( g.xyz, l.zxy );
+                vec3 x1 = x0 - i1 + 0.166666;
+                vec3 x2 = x0 - i2 + 0.333333;
+                vec3 x3 = x0 - 1.0 + 0.5;
+                vec3 n = max(0.6 - vec3(dot(x0,x0), dot(x1,x1), dot(x2,x2)), 0.0);
+                n = n*n; n = n*n;
+                vec3 n2 = max(0.6 - vec3(dot(x3,x3), 0.0, 0.0), 0.0);
+                n2 = n2*n2; n2 = n2*n2;
+                return dot(vec4(n, n2.x), vec4(dot(hash33(i),x0), dot(hash33(i+i1),x1), dot(hash33(i+i2),x2), dot(hash33(i+1.0),x3))) * 32.0;
+            }
+
+            float fbm(vec3 p) {
+                float f = 0.0;
+                float amp = 0.5;
+                for(int i=0; i<4; i++) {
+                    f += amp * noise(p);
+                    p *= 2.0;
+                    amp *= 0.5;
+                }
+                return f;
+            }
+
+            void main() {
+                if (uLayerType == 0 || uOpacity <= 0.0) {
+                    discard;
+                }
+                vec3 p = normalize(vPosition) * 3.0;
+                vec3 color = vec3(0.0);
+                float alpha = 0.0;
+
+                if (uLayerType == 1) {
+                    // Temperature
+                    float latBase = 1.0 - abs(vUv.y - 0.5) * 2.0;
+                    float n = fbm(p + uTime * 0.05) * 0.3;
+                    float tempVal = clamp(latBase + n, 0.0, 1.0);
+                    if (tempVal < 0.25) color = mix(vec3(0,0,0.8), vec3(0,0.8,1), tempVal*4.0);
+                    else if (tempVal < 0.5) color = mix(vec3(0,0.8,1), vec3(0.8,1,0), (tempVal-0.25)*4.0);
+                    else if (tempVal < 0.75) color = mix(vec3(0.8,1,0), vec3(1,0.5,0), (tempVal-0.5)*4.0);
+                    else color = mix(vec3(1,0.5,0), vec3(0.8,0,0), (tempVal-0.75)*4.0);
+                    alpha = uOpacity * 0.7;
+                } else if (uLayerType == 2) {
+                    // Precipitation
+                    float n = fbm(p * 2.0 + vec3(uTime * 0.1, 0, 0));
+                    n = smoothstep(0.3, 0.8, n);
+                    color = mix(vec3(0.1, 0.5, 0.8), vec3(0.0, 1.0, 0.5), n);
+                    alpha = n * uOpacity * 0.8;
+                } else if (uLayerType == 3) {
+                    // Wind/Pressure
+                    float n1 = fbm(p * vec3(1.0, 4.0, 1.0) + vec3(uTime * 0.2, 0, 0));
+                    float n2 = sin(n1 * 20.0);
+                    float val = smoothstep(0.8, 1.0, n2);
+                    color = vec3(0.8, 0.9, 1.0);
+                    alpha = val * uOpacity * 0.6;
+                } else if (uLayerType == 4) {
+                    // Anomaly
+                    float n = fbm(p * 1.5);
+                    if (n > 0.0) {
+                        color = mix(vec3(1.0, 0.9, 0.8), vec3(1.0, 0.2, 0.2), n*2.0);
+                    } else {
+                        color = mix(vec3(0.8, 0.9, 1.0), vec3(0.2, 0.4, 1.0), -n*2.0);
+                    }
+                    alpha = abs(n) * uOpacity * 0.8;
+                }
+
+                gl_FragColor = vec4(color, alpha);
+            }
+        `;
+
+        class GlobeEngine {
+            constructor(containerId, onLocationSelect) {
+                this.container = document.getElementById(containerId);
+                this.onLocationSelect = onLocationSelect;
+                this.init();
+            }
+
+            init() {
+                // Scene setup - Transparent background so HTML color shows through
+                this.scene = new THREE.Scene();
+                this.scene.background = null; 
+
+                // Camera setup
+                this.camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+                this.camera.position.set(0, 0, 280);
+
+                // Renderer setup
+                this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+                this.container.appendChild(this.renderer.domElement);
+
+                // Controls
+                this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
+                this.controls.enableDamping = true;
+                this.controls.dampingFactor = 0.05;
+                this.controls.enablePan = false;
+                this.controls.minDistance = 120;
+                this.controls.maxDistance = 400;
+
+                // Lighting (Bright enough to illuminate fallback colors if textures fail)
+                const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+                this.scene.add(ambientLight);
+
+                this.sunLight = new THREE.DirectionalLight(0xffffff, 1.5);
+                this.sunLight.position.set(500, 300, 500);
+                this.scene.add(this.sunLight);
+
+                // Groups
+                this.earthGroup = new THREE.Group();
+                this.scene.add(this.earthGroup);
+                
+                this.markersGroup = new THREE.Group();
+                this.earthGroup.add(this.markersGroup);
+
+                this.createLayers();
+                this.setupInteraction();
+
+                // Animation Loop
+                this.clock = new THREE.Clock();
+                this.animate = this.animate.bind(this);
+                this.animate();
+
+                // Resize handler
+                window.addEventListener('resize', this.onWindowResize.bind(this), false);
+            }
+
+            createLayers() {
+                const textureLoader = new THREE.TextureLoader();
+                const radius = 100;
+                const segments = 64;
+
+                // 1. Earth Base - Ensure a fallback color exists to guarantee rendering
+                const earthGeo = new THREE.SphereGeometry(radius, segments, segments);
+                const earthMat = new THREE.MeshPhongMaterial({
+                    color: 0x051535, // Solid dark blue fallback 
+                    emissive: 0x01020a,
+                    shininess: 15
+                });
+                this.earthBase = new THREE.Mesh(earthGeo, earthMat);
+                this.earthGroup.add(this.earthBase);
+
+                // Async load textures to enhance the base once available
+                textureLoader.load('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg', (tex) => {
+                    earthMat.map = tex;
+                    earthMat.color.setHex(0xffffff); // Reset fallback color when texture loads
+                    earthMat.needsUpdate = true;
+                });
+
+                // 2. Clouds
+                const cloudGeo = new THREE.SphereGeometry(radius + 0.5, segments, segments);
+                const cloudMat = new THREE.MeshPhongMaterial({
+                    color: 0xffffff,
+                    transparent: true,
+                    opacity: 0.0, // Hidden until texture loads
+                    blending: THREE.AdditiveBlending,
+                    side: THREE.DoubleSide
+                });
+                this.clouds = new THREE.Mesh(cloudGeo, cloudMat);
+                this.earthGroup.add(this.clouds);
+                
+                textureLoader.load('https://unpkg.com/three-globe/example/img/earth-clouds.png', (tex) => {
+                    cloudMat.map = tex;
+                    cloudMat.opacity = 0.8;
+                    cloudMat.needsUpdate = true;
+                });
+
+                // 3. Atmosphere Glow
+                const atmosGeo = new THREE.SphereGeometry(radius + 2, segments, segments);
+                const atmosMat = new THREE.ShaderMaterial({
+                    vertexShader: atmosphereVertexShader,
+                    fragmentShader: atmosphereFragmentShader,
+                    blending: THREE.AdditiveBlending,
+                    side: THREE.BackSide,
+                    transparent: true
+                });
+                this.atmosphere = new THREE.Mesh(atmosGeo, atmosMat);
+                this.earthGroup.add(this.atmosphere);
+
+                // 4. Data Layer (Shader)
+                const dataGeo = new THREE.SphereGeometry(radius + 0.2, segments, segments);
+                this.dataUniforms = {
+                    uTime: { value: 0.0 },
+                    uLayerType: { value: 0 },
+                    uOpacity: { value: 1.0 }
+                };
+                const dataMat = new THREE.ShaderMaterial({
+                    vertexShader: dataVertexShader,
+                    fragmentShader: dataFragmentShader,
+                    uniforms: this.dataUniforms,
+                    transparent: true,
+                    depthWrite: false
+                });
+                this.dataLayer = new THREE.Mesh(dataGeo, dataMat);
+                this.earthGroup.add(this.dataLayer);
+                
+                this.createStars();
+            }
+            
+            createStars() {
+                const starsGeometry = new THREE.BufferGeometry();
+                const starsMaterial = new THREE.PointsMaterial({color: 0xffffff, size: 0.5, transparent: true, opacity: 0.6});
+                const starsVertices = [];
+                for(let i = 0; i < 2000; i++) {
+                    const x = THREE.MathUtils.randFloatSpread(2000);
+                    const y = THREE.MathUtils.randFloatSpread(2000);
+                    const z = THREE.MathUtils.randFloatSpread(2000);
+                    if(Math.sqrt(x*x + y*y + z*z) > 300) {
+                        starsVertices.push(x, y, z);
+                    }
+                }
+                starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starsVertices, 3));
+                const starField = new THREE.Points(starsGeometry, starsMaterial);
+                this.scene.add(starField);
+            }
+
+            setupInteraction() {
+                this.raycaster = new THREE.Raycaster();
+                this.mouse = new THREE.Vector2();
+
+                this.renderer.domElement.addEventListener('click', (event) => {
+                    this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                    this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+                    this.raycaster.setFromCamera(this.mouse, this.camera);
+                    const intersects = this.raycaster.intersectObject(this.earthBase);
+
+                    if (intersects.length > 0) {
+                        const hitPoint = intersects[0].point;
+                        const r = 100;
+                        const lat = Math.asin(hitPoint.y / r) * (180 / Math.PI);
+                        const lon = Math.atan2(hitPoint.x, hitPoint.z) * (180 / Math.PI);
+                        
+                        this.addMarker(lat, lon);
+                        
+                        if (this.onLocationSelect) {
+                            let name = "Selected Coordinates";
+                            if (lat > 8 && lat < 37 && lon > 68 && lon < 97) name = "India Subcontinent";
+                            else if (lat > 25 && lat < 49 && lon > -125 && lon < -66) name = "North America";
+                            else if (lat > 35 && lat < 71 && lon > -10 && lon < 40) name = "Europe";
+                            else if (lat > -40 && lat < 5 && lon > -80 && lon < -35) name = "South America";
+
+                            this.onLocationSelect({
+                                lat: lat.toFixed(2),
+                                lon: lon.toFixed(2),
+                                name: name
+                            });
+                        }
+                    }
+                });
+            }
+
+            setLayer(typeStr) {
+                const typeMap = { 'none': 0, 'temperature': 1, 'precipitation': 2, 'wind': 3, 'anomaly': 4 };
+                const newType = typeMap[typeStr] !== undefined ? typeMap[typeStr] : 0;
+                this.dataUniforms.uLayerType.value = newType;
+                
+                // Dim earth base slightly if a data layer is active to make it pop
+                if (newType !== 0) {
+                    this.earthBase.material.color.setHex(this.earthBase.material.map ? 0x888888 : 0x020815);
+                    this.clouds.material.opacity = 0.1;
+                } else {
+                    this.earthBase.material.color.setHex(this.earthBase.material.map ? 0xffffff : 0x051535);
+                    if(this.clouds.material.map) this.clouds.material.opacity = 0.8;
+                }
+            }
+
+            addMarker(lat, lon) {
+                while(this.markersGroup.children.length > 0){ 
+                    this.markersGroup.remove(this.markersGroup.children[0]); 
+                }
+                const r = 100;
+                const phi = (90 - lat) * (Math.PI / 180);
+                const theta = (lon + 180) * (Math.PI / 180);
+                const x = -(r * Math.sin(phi) * Math.cos(theta));
+                const z = (r * Math.sin(phi) * Math.sin(theta));
+                const y = (r * Math.cos(phi));
+
+                const geometry = new THREE.SphereGeometry(1.5, 16, 16);
+                const material = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+                const marker = new THREE.Mesh(geometry, material);
+                marker.position.set(x, y, z);
+                
+                const ringGeo = new THREE.RingGeometry(2, 2.5, 32);
+                const ringMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, side: THREE.DoubleSide, transparent: true, opacity: 0.5 });
+                const ring = new THREE.Mesh(ringGeo, ringMat);
+                ring.position.copy(marker.position);
+                ring.lookAt(0,0,0);
+                
+                this.markersGroup.add(marker);
+                this.markersGroup.add(ring);
+            }
+
+            setCinematicMode(isCinematic) {
+                if (isCinematic) {
+                    this.controls.autoRotate = true;
+                    this.controls.autoRotateSpeed = 0.5;
+                    this.camera.position.set(0, 50, 300);
+                } else {
+                    this.controls.autoRotate = false;
+                    // Move closer for interactive platform mode
+                    this.camera.position.set(0, 0, 220); 
+                }
+            }
+
+            onWindowResize() {
+                this.camera.aspect = window.innerWidth / window.innerHeight;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+
+            animate() {
+                requestAnimationFrame(this.animate);
+                const time = this.clock.getElapsedTime();
+
+                if (this.clouds) this.clouds.rotation.y = time * 0.02;
+                if (this.dataUniforms) this.dataUniforms.uTime.value = time;
+                
+                if(this.markersGroup.children.length > 1) {
+                    const scale = 1 + Math.sin(time * 5) * 0.2;
+                    this.markersGroup.children[1].scale.set(scale, scale, scale);
+                }
+
+                this.controls.update();
+                this.renderer.render(this.scene, this.camera);
+            }
+        }
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const IconMenu = () => <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>;
+        const IconMic = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>;
+        const IconSend = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>;
+        const IconLayers = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 12 12 17 22 12"></polyline><polyline points="2 17 12 22 22 17"></polyline></svg>;
+        const IconAlertTriangle = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>;
+        const IconThermometer = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"></path></svg>;
+        const IconWind = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2"></path></svg>;
+        const IconCloudRain = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="16" y1="13" x2="16" y2="21"></line><line x1="8" y1="13" x2="8" y2="21"></line><line x1="12" y1="15" x2="12" y2="23"></line><path d="M20 16.58A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25"></path></svg>;
+
+        const Navigation = ({ view, setView, setActiveLayer }) => {
+            return (
+                <nav className={`w-full absolute top-0 left-0 z-50 transition-all duration-500 pointer-events-auto ${view === 'platform' ? 'glass-panel border-b border-white/10' : 'bg-transparent pt-6'}`}>
+                    <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+                        <div 
+                            className="text-xl font-bold tracking-wider cursor-pointer flex items-center gap-2"
+                            onClick={() => { setView('landing'); setActiveLayer('none'); }}
+                        >
+                            <div className="w-6 h-6 rounded-full bg-brand-400 opacity-80 blur-[2px]"></div>
+                            <span>ATMO<span className="text-brand-400 font-light">SPHERE</span></span>
+                        </div>
+                        
+                        <div className="hidden md:flex items-center gap-8 text-sm font-medium text-slate-300">
+                            <button onClick={() => { setView('platform'); setActiveLayer('temperature'); }} className="hover:text-white transition-colors">Forecast</button>
+                            <button onClick={() => { setView('platform'); setActiveLayer('anomaly'); }} className="hover:text-white transition-colors">Climate</button>
+                            <button onClick={() => { setView('platform'); setActiveLayer('none'); }} className="hover:text-white transition-colors">Decision Support</button>
+                            <button onClick={() => { setView('platform'); setActiveLayer('precipitation'); }} className="flex items-center gap-1 hover:text-alert-warning transition-colors">
+                                <IconAlertTriangle /> Alerts
+                            </button>
+                        </div>
+                        
+                        <div className="flex items-center gap-4">
+                            {view === 'landing' ? (
+                                <button 
+                                    onClick={() => setView('platform')}
+                                    className="px-5 py-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-md text-sm font-semibold transition-all"
+                                >
+                                    Explore Platform
+                                </button>
+                            ) : (
+                                <div className="w-8 h-8 rounded-full bg-brand-900 border border-brand-500 flex items-center justify-center text-xs font-bold shadow-lg shadow-brand-500/20 cursor-pointer hover:bg-brand-500 transition-colors">
+                                    USR
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </nav>
+            );
+        };
+
+        const LandingPage = ({ setView }) => {
+            const nextSectionRef = useRef(null);
+
+            const handleScrollDown = () => {
+                nextSectionRef.current?.scrollIntoView({ behavior: 'smooth' });
+            };
+
+            return (
+                <div className="w-full h-full">
+                    {/* Hero Section */}
+                    <div className="w-full h-screen flex flex-col justify-center px-10 md:px-24 relative pointer-events-none">
+                        <div className="max-w-3xl pointer-events-auto mt-20">
+                            <h1 className="text-6xl md:text-8xl font-bold tracking-tighter leading-none mb-6 text-transparent bg-clip-text bg-gradient-to-br from-white to-slate-400">
+                                WEATHER.<br/>
+                                CLIMATE.<br/>
+                                <span className="text-brand-400">INTELLIGENCE.</span>
+                            </h1>
+                            <p className="text-xl md:text-2xl text-slate-300 mb-10 max-w-2xl font-light">
+                                Conversational intelligence for weather, climate, and real-world decisions.
+                            </p>
+                            <div className="flex flex-wrap gap-4">
+                                <button 
+                                    onClick={() => setView('platform')}
+                                    className="px-8 py-4 rounded-full bg-brand-500 hover:bg-brand-400 text-white font-semibold transition-colors shadow-[0_0_20px_rgba(14,165,233,0.4)]"
+                                >
+                                    Enter Platform
+                                </button>
+                                <button 
+                                    className="px-8 py-4 rounded-full glass-button font-medium flex items-center gap-2"
+                                    onClick={handleScrollDown}
+                                >
+                                    See How It Works ↓
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    {/* Information Section */}
+                    <div ref={nextSectionRef} className="w-full min-h-screen flex items-center px-10 md:px-24 pointer-events-none relative z-10 bg-gradient-to-b from-transparent to-brand-space pt-20">
+                        <div className="max-w-md pointer-events-auto glass-panel p-8 rounded-2xl shadow-2xl border border-white/10">
+                            <h2 className="text-3xl font-bold mb-4">Understand the Atmosphere</h2>
+                            <p className="text-slate-300 mb-6">Our geospatial engine processes petabytes of climate data into an interactive, real-time representation of Earth's systems.</p>
+                            <div className="space-y-4">
+                                <div className="flex items-center gap-3"><IconThermometer className="text-brand-400"/> Temperature Fields</div>
+                                <div className="flex items-center gap-3"><IconWind className="text-brand-400"/> Global Wind Vectors</div>
+                                <div className="flex items-center gap-3"><IconCloudRain className="text-brand-400"/> Precipitation Forecasts</div>
+                            </div>
+                            <button 
+                                onClick={() => setView('platform')}
+                                className="mt-8 w-full py-3 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 transition-all font-medium"
+                            >
+                                Open Visualization Layer
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const PlatformUI = ({ 
+            activeLayer, 
+            setActiveLayer, 
+            location, 
+            chatHistory, 
+            onSendMessage,
+            domain,
+            setDomain
+        }) => {
+            const [inputMsg, setInputMsg] = useState("");
+            const chatEndRef = useRef(null);
+
+            useEffect(() => {
+                chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+            }, [chatHistory]);
+
+            const handleSend = (e) => {
+                e.preventDefault();
+                if(!inputMsg.trim()) return;
+                onSendMessage(inputMsg);
+                setInputMsg("");
+            };
+
+            const layers = [
+                { id: 'none', label: 'Base Earth', icon: null },
+                { id: 'temperature', label: 'Temperature', icon: <IconThermometer/> },
+                { id: 'precipitation', label: 'Precipitation', icon: <IconCloudRain/> },
+                { id: 'wind', label: 'Wind / Pressure', icon: <IconWind/> },
+                { id: 'anomaly', label: 'Climate Anomaly', icon: <IconAlertTriangle/> },
+            ];
+
+            const domains = ['Agriculture', 'Aviation', 'Marine', 'Disaster', 'Research'];
+
+            return (
+                <div className="w-full h-full pt-16 flex p-4 gap-4 pointer-events-none">
+                    
+                    {/* Left Sidebar - AI Chat */}
+                    <div className="w-80 h-full flex flex-col pointer-events-auto">
+                        <div className="glass-panel rounded-2xl flex-1 flex flex-col overflow-hidden shadow-2xl border border-white/10 bg-slate-900/80 backdrop-blur-xl">
+                            {/* Domain Selector */}
+                            <div className="p-4 border-b border-white/10 bg-black/20">
+                                <div className="text-xs uppercase tracking-wider text-slate-400 mb-2">Context Domain</div>
+                                <select 
+                                    className="w-full bg-slate-800/80 border border-slate-700 text-white text-sm rounded-lg focus:ring-brand-500 focus:border-brand-500 block p-2 outline-none"
+                                    value={domain}
+                                    onChange={(e) => setDomain(e.target.value)}
+                                >
+                                    {domains.map(d => <option key={d} value={d.toLowerCase()}>{d}</option>)}
+                                </select>
+                            </div>
+
+                            {/* Chat History */}
+                            <div className="flex-1 overflow-y-auto p-4 space-y-4 panel-scroll">
+                                {chatHistory.map((msg, i) => (
+                                    <div key={i} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                                        <div className={`max-w-[90%] p-3 rounded-2xl text-sm leading-relaxed shadow-sm ${
+                                            msg.role === 'user' 
+                                            ? 'bg-brand-500 text-white rounded-tr-sm' 
+                                            : 'bg-slate-800/90 text-slate-200 rounded-tl-sm border border-slate-700'
+                                        }`}>
+                                            {msg.text}
+                                        </div>
+                                        {/* Rich Response handling for AI */}
+                                        {msg.role === 'ai' && msg.data && (
+                                            <div className="mt-2 w-full bg-slate-800/60 rounded-xl p-3 border-l-2 border-l-brand-400 text-xs shadow-inner">
+                                                <div className="font-bold mb-1 text-white">{msg.data.title}</div>
+                                                <div className="text-slate-300 whitespace-pre-line">{msg.data.content}</div>
+                                                {msg.data.confidence && (
+                                                    <div className="mt-3 pt-2 border-t border-white/5 flex items-center justify-between text-slate-400 text-[10px] uppercase">
+                                                        <span>Conf: {msg.data.confidence}</span>
+                                                        <span>Source: {msg.data.source}</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                                <div ref={chatEndRef} />
+                            </div>
+
+                            {/* Input form */}
+                            <div className="p-3 border-t border-white/10 bg-black/20">
+                                <form onSubmit={handleSend} className="relative flex items-center">
+                                    <input 
+                                        type="text" 
+                                        value={inputMsg}
+                                        onChange={(e) => setInputMsg(e.target.value)}
+                                        placeholder="Ask about risk, climate..."
+                                        className="w-full bg-slate-800 border border-slate-600 text-sm rounded-full pl-4 pr-20 py-3 focus:outline-none focus:border-brand-400 text-white placeholder-slate-400 shadow-inner"
+                                    />
+                                    <div className="absolute right-2 flex gap-1">
+                                        <button type="button" className="p-2 text-slate-400 hover:text-white rounded-full hover:bg-slate-700 transition">
+                                            <IconMic />
+                                        </button>
+                                        <button type="submit" className="p-2 text-brand-400 hover:text-brand-300 rounded-full hover:bg-slate-700 transition">
+                                            <IconSend />
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Right Side - Floating Controls */}
+                    <div className="flex-1 flex flex-col justify-between items-end pointer-events-none pb-4">
+                        
+                        {/* Top Right: Location Metadata */}
+                        {location && (
+                            <div className="glass-panel p-4 rounded-2xl w-64 pointer-events-auto border-t-2 border-t-brand-400 shadow-xl bg-slate-900/80 backdrop-blur-md">
+                                <div className="text-xs text-slate-400 uppercase tracking-widest mb-1">Target Region</div>
+                                <div className="font-bold text-lg">{location.name}</div>
+                                <div className="tech-text text-xs text-brand-400 mt-2 bg-black/30 p-2 rounded-lg">
+                                    LAT: {location.lat}°<br/>LON: {location.lon}°
+                                </div>
+                            </div>
+                        )}
+                        {!location && (
+                            <div className="glass-panel px-4 py-2 rounded-full pointer-events-auto shadow-md border border-white/10 text-xs text-slate-400">
+                                Click Earth to select region
+                            </div>
+                        )}
+
+                        {/* Bottom Right: Layer Controls & Timeline */}
+                        <div className="w-full max-w-2xl flex flex-col gap-4 pointer-events-auto">
+                            
+                            {/* Layer Toggles */}
+                            <div className="glass-panel p-2 rounded-2xl flex items-center justify-around overflow-x-auto self-end w-full md:w-auto bg-slate-900/80">
+                                <div className="px-3 border-r border-white/10 flex items-center gap-2 text-slate-400">
+                                    <IconLayers /> <span className="text-xs uppercase tracking-wider hidden md:inline">Layers</span>
+                                </div>
+                                {layers.map(layer => (
+                                    <button 
+                                        key={layer.id}
+                                        onClick={() => setActiveLayer(layer.id)}
+                                        className={`px-4 py-2 text-sm font-medium rounded-xl flex items-center gap-2 transition-all mx-1 whitespace-nowrap
+                                            ${activeLayer === layer.id ? 'bg-brand-500 text-white shadow-lg shadow-brand-500/30' : 'text-slate-300 hover:bg-white/10'}
+                                        `}
+                                    >
+                                        {layer.icon && <span className="w-4 h-4">{layer.icon}</span>}
+                                        {layer.label}
+                                    </button>
+                                ))}
+                            </div>
+
+                            {/* Timeline Control */}
+                            <div className="glass-panel p-4 rounded-2xl w-full flex flex-col gap-3 bg-slate-900/80">
+                                <div className="flex justify-between text-xs tech-text text-slate-400">
+                                    <span>HISTORICAL</span>
+                                    <span className="text-white bg-brand-500/20 px-2 rounded">LIVE</span>
+                                    <span>FORECAST</span>
+                                </div>
+                                <input 
+                                    type="range" 
+                                    min="-100" max="100" defaultValue="0"
+                                    className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-brand-400"
+                                />
+                                <div className="flex justify-between text-[10px] text-slate-500 uppercase">
+                                    <span>-30 Days</span>
+                                    <span>Now</span>
+                                    <span>+14 Days</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [view, setView] = useState('landing'); // 'landing' | 'platform'
+            const [activeLayer, setActiveLayer] = useState('none');
+            const [location, setLocation] = useState(null);
+            const [domain, setDomain] = useState('marine');
+            
+            const [chatHistory, setChatHistory] = useState([
+                { role: 'ai', text: 'Atmosphere Intelligence online. I can assist with weather forecasting, climate analysis, and domain-specific risk assessment. What would you like to know?' }
+            ]);
+
+            const engineRef = useRef(null);
+
+            // Initialize 3D Engine strictly once
+            useEffect(() => {
+                if (!engineRef.current) {
+                    engineRef.current = new GlobeEngine('canvas-container', (locData) => {
+                        setLocation(locData);
+                        setView('platform'); // Auto-switch to workspace when globe is clicked
+                    });
+                }
+            }, []);
+
+            // Sync View Modes to 3D Camera
+            useEffect(() => {
+                if (engineRef.current) {
+                    engineRef.current.setCinematicMode(view === 'landing');
+                }
+            }, [view]);
+
+            // Sync Data Layers to 3D Shader
+            useEffect(() => {
+                if (engineRef.current) {
+                    engineRef.current.setLayer(activeLayer);
+                }
+            }, [activeLayer]);
+
+            // Mock Conversational Logic parsing intent
+            const handleUserMessage = (text) => {
+                setChatHistory(prev => [...prev, { role: 'user', text }]);
+
+                setTimeout(() => {
+                    let aiResponse = { role: 'ai', text: "I've analyzed the atmospheric data." };
+                    const lowerText = text.toLowerCase();
+
+                    if (lowerText.includes('fishing') || lowerText.includes('marine') || lowerText.includes('vessel')) {
+                        setDomain('marine');
+                        setActiveLayer('wind');
+                        aiResponse.text = "Switching to Marine Operations context and displaying wind vector fields.";
+                        aiResponse.data = {
+                            title: "Marine Risk Assessment: Elevated",
+                            content: "Wind: 28 km/h NW\nWave Height: 2.4 m\nVisibility: 6.2 km\n\nRecommendation: Consider delaying departure until 14:00 UTC due to building swell.",
+                            confidence: "High (87%)",
+                            source: "NOAA WW3 + ECMWF"
+                        };
+                    } else if (lowerText.includes('agriculture') || lowerText.includes('farm') || lowerText.includes('rain')) {
+                        setDomain('agriculture');
+                        setActiveLayer('precipitation');
+                        aiResponse.text = "Switching to Agriculture context and displaying precipitation forecast.";
+                        aiResponse.data = {
+                            title: "Crop Risk: Low",
+                            content: "Precipitation expected: 12mm over next 48h.\nSoil Moisture: 45% (Optimal)\nHeat Stress Index: Safe",
+                            confidence: "Moderate",
+                            source: "ERA5-Land"
+                        };
+                    } else if (lowerText.includes('temperature') || lowerText.includes('hot')) {
+                        setActiveLayer('temperature');
+                        aiResponse.text = "Displaying global surface temperature fields.";
+                        if (location) {
+                            aiResponse.data = {
+                                title: `Local Temp: ${location.name}`,
+                                content: "Current: 32°C\nForecast High: 35°C\nAnomaly: +2.1°C above historical average.",
+                                confidence: "High",
+                                source: "GFS Ens"
+                            }
+                        }
+                    } else if (lowerText.includes('anomaly') || lowerText.includes('trend')) {
+                        setActiveLayer('anomaly');
+                        aiResponse.text = "Loading historical climate anomaly overlay. Red indicates warming trends relative to 1980-2010 baseline.";
+                    } else {
+                        aiResponse.text = `I'm analyzing data for ${location ? location.name : 'the global view'}. Try asking about risk for marine operations, agriculture, or temperature anomalies.`;
+                    }
+
+                    setChatHistory(prev => [...prev, aiResponse]);
+                }, 800);
+            };
+
+            return (
+                // Scrollable container for landing page, hidden overflow for platform
+                <div className={`w-full h-full relative font-sans ${view === 'landing' ? 'overflow-y-auto no-scrollbar pointer-events-auto' : 'overflow-hidden pointer-events-none'}`}>
+                    <Navigation view={view} setView={setView} setActiveLayer={setActiveLayer} />
+                    
+                    {view === 'landing' && (
+                        <LandingPage setView={setView} />
+                    )}
+                    
+                    {view === 'platform' && (
+                        <PlatformUI 
+                            activeLayer={activeLayer} 
+                            setActiveLayer={setActiveLayer}
+                            location={location}
+                            chatHistory={chatHistory}
+                            onSendMessage={handleUserMessage}
+                            domain={domain}
+                            setDomain={setDomain}
+                        />
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
