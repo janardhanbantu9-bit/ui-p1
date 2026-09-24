@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weather & Climate Intelligence</title>
+    
+    <!-- Tailwind CSS (for premium styling) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Custom Tailwind Config (if any specific colors/fonts were defined in the script) -->
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              brandBlue: '#00f0ff',
+              deepSpace: '#050914'
+            }
+          }
+        }
+      }
+    </script>
+
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel (required to compile JSX in the browser for local development) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Three.js (for the interactive 3D Globe) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    
+    <!-- External CSS file -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-black text-white antialiased overflow-hidden m-0 p-0 h-screen w-screen">
+    
+    <!-- The entire application mounts into this root div -->
+    <div id="root"></div>
+
+    <!-- External JS file -->
+    <!-- CRITICAL: type="text/babel" is required for your local React JSX code to run -->
+    <script type="text/babel" src="app.js"></script>
+
+</body>
+</html>
