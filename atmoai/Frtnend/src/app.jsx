@@ -1,3 +1,5 @@
+const { useState, useEffect, useRef } = React;
+
 const App = () => {
             const [view, setView] = useState('landing'); // 'landing' | 'platform'
             const [activeLayer, setActiveLayer] = useState('none');
@@ -34,11 +36,26 @@ const App = () => {
                 }
             }, [activeLayer]);
 
-            // Mock Conversational Logic parsing intent
-            const handleUserMessage = (text) => {
-                setChatHistory(prev => [...prev, { role: 'user', text }]);
+            const handleUserMessage = async (text) => {
+                const pendingId = `pending-${Date.now()}-${Math.random()}`;
+                setChatHistory(prev => [...prev, { role: 'user', text }, { role: 'ai', text: 'Thinking...', pendingId }]);
 
-                setTimeout(() => {
+                try {
+                    const reply = await window.sendMessage(text);
+                    setChatHistory(prev => prev.map(msg =>
+                        msg.pendingId === pendingId ? { role: 'ai', text: reply } : msg
+                    ));
+                } catch (error) {
+                    const errorText = error instanceof Error ? error.message : 'Unable to get a response. Please try again.';
+                    setChatHistory(prev => prev.map(msg =>
+                        msg.pendingId === pendingId
+                            ? { role: 'ai', text: `Sorry, I couldn't get a response: ${errorText}` }
+                            : msg
+                    ));
+                }
+            };
+
+            /*
                     let aiResponse = { role: 'ai', text: "I've analyzed the atmospheric data." };
                     const lowerText = text.toLowerCase();
 
@@ -81,8 +98,7 @@ const App = () => {
                     }
 
                     setChatHistory(prev => [...prev, aiResponse]);
-                }, 800);
-            };
+            */
 
             return (
                 // Scrollable container for landing page, hidden overflow for platform

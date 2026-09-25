@@ -1,4 +1,6 @@
+export const GLOBE_RADIUS = 100;
 class GlobeEngine {
+    
             constructor(containerId, onLocationSelect) {
                 this.container = document.getElementById(containerId);
                 this.onLocationSelect = onLocationSelect;
@@ -71,7 +73,7 @@ class GlobeEngine {
                 this.earthGroup.add(this.earthBase);
 
                 // Async load textures to enhance the base once available
-                textureLoader.load('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg', (tex) => {
+                textureLoader.load('./Frtnend/src/globe/assets/earth-blue-marble.jpg', (tex) => {
                     earthMat.map = tex;
                     earthMat.color.setHex(0xffffff); // Reset fallback color when texture loads
                     earthMat.needsUpdate = true;
@@ -89,7 +91,7 @@ class GlobeEngine {
                 this.clouds = new THREE.Mesh(cloudGeo, cloudMat);
                 this.earthGroup.add(this.clouds);
                 
-                textureLoader.load('https://unpkg.com/three-globe/example/img/earth-clouds.png', (tex) => {
+                textureLoader.load('./Frtnend/src/globe/assets/clouds.png', (tex) => {
                     cloudMat.map = tex;
                     cloudMat.opacity = 0.8;
                     cloudMat.needsUpdate = true;
