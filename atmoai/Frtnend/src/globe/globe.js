@@ -1,4 +1,4 @@
-export const GLOBE_RADIUS = 100;
+const GLOBE_RADIUS = 100;
 class GlobeEngine {
     
             constructor(containerId, onLocationSelect) {
