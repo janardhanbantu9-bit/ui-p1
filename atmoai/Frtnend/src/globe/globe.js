@@ -164,7 +164,7 @@ const r = GLOBE_RADIUS;
 const lat = Math.asin(hitPoint.y / r) * (180 / Math.PI);
 const lon = Math.atan2(hitPoint.x, hitPoint.z) * (180 / Math.PI);
 
-this.addMarker(lat, lon);
+this.addMarker(hitPoint);
 
 if (this.onLocationSelect) {
     try {
@@ -235,7 +235,7 @@ if (this.onLocationSelect) {
                 }
             }
 
-            addMarker(hitPoint) {``
+            addMarker(hitPoint) {
                 while(this.markersGroup.children.length > 0){ 
                     this.markersGroup.remove(this.markersGroup.children[0]); 
                 }
