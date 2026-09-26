@@ -150,7 +150,7 @@ class GlobeEngine {
                 this.raycaster = new THREE.Raycaster();
                 this.mouse = new THREE.Vector2();
 
-                this.renderer.domElement.addEventListener('click', (event) => {
+                this.renderer.domElement.addEventListener('click', async (event) => {
                     this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
                     this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
@@ -159,25 +159,63 @@ class GlobeEngine {
 
                     if (intersects.length > 0) {
                         const hitPoint = intersects[0].point;
-                        const r = 100;
-                        const lat = Math.asin(hitPoint.y / r) * (180 / Math.PI);
-                        const lon = Math.atan2(hitPoint.x, hitPoint.z) * (180 / Math.PI);
-                        
-                        this.addMarker(lat, lon);
-                        
-                        if (this.onLocationSelect) {
-                            let name = "Selected Coordinates";
-                            if (lat > 8 && lat < 37 && lon > 68 && lon < 97) name = "India Subcontinent";
-                            else if (lat > 25 && lat < 49 && lon > -125 && lon < -66) name = "North America";
-                            else if (lat > 35 && lat < 71 && lon > -10 && lon < 40) name = "Europe";
-                            else if (lat > -40 && lat < 5 && lon > -80 && lon < -35) name = "South America";
+const r = GLOBE_RADIUS;
 
-                            this.onLocationSelect({
-                                lat: lat.toFixed(2),
-                                lon: lon.toFixed(2),
-                                name: name
-                            });
-                        }
+const lat = Math.asin(hitPoint.y / r) * (180 / Math.PI);
+const lon = Math.atan2(hitPoint.x, hitPoint.z) * (180 / Math.PI);
+
+this.addMarker(lat, lon);
+
+if (this.onLocationSelect) {
+    try {
+        const response = await fetch("/api/reverse-geocode", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                latitude: lat,
+                longitude: lon
+            })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || "Reverse geocoding failed");
+        }
+
+        const address = data.address || {};
+
+        const name =
+            address.suburb ||
+            address.town ||
+            address.village ||
+            address.city ||
+            address.municipality ||
+            address.county ||
+            "Selected Coordinates";
+
+        this.onLocationSelect({
+            lat: lat.toFixed(2),
+            lon: lon.toFixed(2),
+            name,
+            city: address.city || null,
+            state: address.state || null,
+            country: address.country || null,
+            displayName: data.displayName || null
+        });
+
+    } catch (error) {
+        console.error("Reverse geocoding failed:", error);
+
+        this.onLocationSelect({
+            lat: lat.toFixed(2),
+            lon: lon.toFixed(2),
+            name: "Selected Coordinates"
+        });
+    }
+}
                     }
                 });
             }
@@ -197,27 +235,24 @@ class GlobeEngine {
                 }
             }
 
-            addMarker(lat, lon) {
+            addMarker(hitPoint) {``
                 while(this.markersGroup.children.length > 0){ 
                     this.markersGroup.remove(this.markersGroup.children[0]); 
                 }
-                const r = GLOBE_RADIUS;
-                const latRad = lat * (Math.PI / 180);
-                const lonRad = lon * (Math.PI / 180);
-
-                const x = r * Math.cos(latRad) * Math.sin(lonRad);
-                const y = r * Math.sin(latRad);
-                const z = r * Math.cos(latRad) * Math.cos(lonRad);
+                const markerPosition = hitPoint
+                .clone()
+                .normalize()
+                .multiplyScalar(GLOBE_RADIUS + 2);
 
                 const geometry = new THREE.SphereGeometry(1.5, 16, 16);
                 const material = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
                 const marker = new THREE.Mesh(geometry, material);
-                marker.position.set(x, y, z);
+                marker.position.copy(markerPosition);
                 
                 const ringGeo = new THREE.RingGeometry(2, 2.5, 32);
                 const ringMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, side: THREE.DoubleSide, transparent: true, opacity: 0.5 });
                 const ring = new THREE.Mesh(ringGeo, ringMat);
-                ring.position.copy(marker.position);
+                ring.position.copy(markerPosition);
                 ring.lookAt(0,0,0);
                 
                 this.markersGroup.add(marker);
