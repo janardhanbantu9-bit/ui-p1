@@ -1,4 +1,4 @@
-import { searchLocation } from "../services/openMeteo/geocodingService.js";
+import { searchLocation } from "../services/openMeteo/geocodingServices.js";
 
 export async function getLocation({ query }) {
   const results = await searchLocation(query);
