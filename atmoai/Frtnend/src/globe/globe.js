@@ -201,12 +201,13 @@ class GlobeEngine {
                 while(this.markersGroup.children.length > 0){ 
                     this.markersGroup.remove(this.markersGroup.children[0]); 
                 }
-                const r = 100;
-                const phi = (90 - lat) * (Math.PI / 180);
-                const theta = (lon + 180) * (Math.PI / 180);
-                const x = -(r * Math.sin(phi) * Math.cos(theta));
-                const z = (r * Math.sin(phi) * Math.sin(theta));
-                const y = (r * Math.cos(phi));
+                const r = GLOBE_RADIUS;
+                const latRad = lat * (Math.PI / 180);
+                const lonRad = lon * (Math.PI / 180);
+
+                const x = r * Math.cos(latRad) * Math.sin(lonRad);
+                const y = r * Math.sin(latRad);
+                const z = r * Math.cos(latRad) * Math.cos(lonRad);
 
                 const geometry = new THREE.SphereGeometry(1.5, 16, 16);
                 const material = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
